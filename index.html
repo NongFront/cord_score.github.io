@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Guitar Chord Detection</title>
+    <style>
+        .result {
+            font-size: 24px;
+            font-weight: bold;
+        }
+        .green {
+            color: green;
+        }
+        .orange {
+            color: orange;
+        }
+        .red {
+            color: red;
+        }
+    </style>
+</head>
+<body>
+    <h1>Guitar Chord Detection</h1>
+<!-- Major Chords -->
+    <div class="chord-buttons">
+        <button onclick="selectChord('C')">C</button>
+        <button onclick="selectChord('D')">D</button>
+        <button onclick="selectChord('E')">E</button>
+        <button onclick="selectChord('F')">F</button>
+        <button onclick="selectChord('G')">G</button>
+        <button onclick="selectChord('A')">A</button>
+
+
+    <!-- Minor Chords -->
+
+        <button onclick="selectChord('Am')">Am</button>
+        <button onclick="selectChord('Dm')">Dm</button>
+        <button onclick="selectChord('Em')">Em</button>
+        <button onclick="selectChord('Bm')">Bm</button>
+        <button onclick="selectChord('Fm')">Fm</button>
+        <button onclick="selectChord('Gm')">Gm</button>
+        <button onclick="selectChord('Cm')">Cm</button>
+    </div>
+    <br>
+    <button onclick="startTuning()">Start Tune</button>
+    <button onclick="stopTuning()">Stop Tune</button>
+
+    <p class="result" id="result">Result: -%</p>
+    <p class="result" id="chordResult"></p>
+
+    <script>
+        let selectedChord = '';
+        let audioContext;
+        let analyser;
+        let dataArray;
+        let maxPercentage = 0;
+        let animationId;
+        let mediaStream;
+
+        const chordFrequencies = {
+             'C': [261.63, 329.63, 392.00], // C Major: C-E-G
+    	     'D': [146.83, 293.66, 369.99], // D Major: D-F#-A
+             'E': [164.81, 329.63, 392.00], // E Major: E-G#-B
+             'F': [174.61, 349.23, 392.00], // F Major: F-A-C
+             'G': [196.00, 246.94, 392.00], // G Major: G-B-D
+             'A': [220.00, 277.18, 329.63], // A Major: A-C#-E
+             'Am': [220.00, 261.63, 329.63], // Am: A-C-E
+             'Dm': [146.83, 220.00, 293.66], // Dm: D-F-A
+             'Em': [164.81, 220.00, 329.63], // Em: E-G-B
+             'Bm': [246.94, 293.66, 440.00], // Bm: B-D-F#
+             'Fm': [174.61, 220.00, 349.23], // Fm: F-Ab-C
+             'Gm': [196.00, 233.08, 392.00], // Gm: G-Bb-D
+             'Cm': [130.81, 196.00, 261.63]  // Cm: C-Eb-G
+        };
+
+        function selectChord(chord) {
+            selectedChord = chord;
+            document.getElementById('result').innerText = `Selected Chord: ${chord}`;
+            document.getElementById('chordResult').innerText = ''; // เคลียร์ผลลัพธ์ก่อนหน้า
+            maxPercentage = 0; // รีเซ็ตค่าสูงสุด
+        }
+
+        async function startTuning() {
+            if (!selectedChord) {
+                alert('กรุณาเลือกคอร์ดก่อนเริ่มการจูน');
+                return;
+            }
+
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+
+            if (!mediaStream) {
+                try {
+                    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                } catch (err) {
+                    alert('ไม่สามารถเข้าถึงไมโครโฟน: ' + err.message);
+                    return;
+                }
+            }
+
+            const source = audioContext.createMediaStreamSource(mediaStream);
+            analyser = audioContext.createAnalyser();
+            source.connect(analyser);
+
+            analyser.fftSize = 2048;
+            const bufferLength = analyser.frequencyBinCount;
+            dataArray = new Uint8Array(bufferLength);
+
+            detectPitch();
+        }
+
+        function stopTuning() {
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
+            if (analyser) {
+                analyser.disconnect();
+                analyser = null;
+            }
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream = null;
+            }
+            document.getElementById('result').innerText = 'Result: -%';
+            document.getElementById('chordResult').innerText = '';
+            maxPercentage = 0;
+        }
+
+        function detectPitch() {
+            analyser.getByteTimeDomainData(dataArray);
+            const frequency = autoCorrelate(dataArray, audioContext.sampleRate);
+
+            if (frequency !== -1 && selectedChord) {
+                const percentage = calculateSimilarity(frequency, chordFrequencies[selectedChord]);
+
+                // อัพเดตค่าสูงสุดถ้าเปอร์เซ็นต์สูงกว่าเดิม
+                if (percentage > maxPercentage) {
+                    maxPercentage = percentage;
+                    displayResult(maxPercentage);
+                    displayChordResult(selectedChord, maxPercentage);
+                }
+            }
+
+            animationId = requestAnimationFrame(detectPitch);
+        }
+
+        function autoCorrelate(buffer, sampleRate) {
+            let SIZE = buffer.length;
+            let maxSamples = Math.floor(SIZE / 2);
+            let bestOffset = -1;
+            let bestCorrelation = 0;
+            let rms = 0;
+            let foundGoodCorrelation = false;
+            let correlations = new Array(maxSamples);
+
+            for (let i = 0; i < SIZE; i++) {
+                let val = buffer[i] / 128 - 1;
+                rms += val * val;
+            }
+
+            rms = Math.sqrt(rms / SIZE);
+
+            if (rms < 0.01) return -1;
+
+            let lastCorrelation = 1;
+
+            for (let offset = 0; offset < maxSamples; offset++) {
+                let correlation = 0;
+
+                for (let i = 0; i < maxSamples; i++) {
+                    correlation += Math.abs((buffer[i] / 128 - 1) - (buffer[i + offset] / 128 - 1));
+                }
+
+                correlation = 1 - (correlation / maxSamples);
+                correlations[offset] = correlation;
+
+                if ((correlation > 0.9) && (correlation > lastCorrelation)) {
+                    foundGoodCorrelation = true;
+                    if (correlation > bestCorrelation) {
+                        bestCorrelation = correlation;
+                        bestOffset = offset;
+                    }
+                }
+
+                lastCorrelation = correlation;
+            }
+
+            if (foundGoodCorrelation) {
+                let T = bestOffset / sampleRate;
+                let frequency = 1 / T;
+                return frequency;
+            }
+
+            return -1;
+        }
+
+        function calculateSimilarity(frequency, targetFrequencies) {
+            let closestFreq = targetFrequencies.reduce((prev, curr) => {
+                return (Math.abs(curr - frequency) < Math.abs(prev - frequency) ? curr : prev);
+            });
+
+            let difference = Math.abs(frequency - closestFreq);
+            let percentage = Math.max(0, 100 - (difference / closestFreq) * 100);
+
+            return percentage;
+        }
+
+        function displayResult(percentage) {
+            const resultElement = document.getElementById('result');
+            resultElement.innerText = `Similarity: ${percentage.toFixed(2)}%`;
+
+            if (percentage > 80) {
+                resultElement.className = 'result green';
+            } else if (percentage > 50) {
+                resultElement.className = 'result orange';
+            } else {
+                resultElement.className = 'result red';
+            }
+        }
+
+        function displayChordResult(chord, percentage) {
+            const chordResultElement = document.getElementById('chordResult');
+            chordResultElement.innerText = `Chord Similarities ${chord}: ${percentage.toFixed(2)}%`;
+        }
+    </script>
+</body>
+</html>
